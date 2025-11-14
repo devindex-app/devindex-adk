@@ -1,0 +1,1 @@
+Build a github developer scorer agent which takes all contributions of a developer (pull requests, issues etc.), analyzes commit quality etc. and scores the developer between 1 and 100
