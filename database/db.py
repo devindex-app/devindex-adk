@@ -1,12 +1,10 @@
-"""Database connection and session management for Supabase pgvector."""
+"""Database connection and operations using Supabase Python client."""
 
 import os
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session
-from contextlib import contextmanager
-from typing import Generator, Dict, Optional, List
-
-from database.models import Base, DeveloperSkills
+import time
+from datetime import datetime, timezone
+from typing import Dict, Optional, List
+from supabase import create_client, Client
 from database.vector_utils import (
     merge_skill_vectors,
     skills_to_vector,
@@ -20,155 +18,62 @@ logger.debug("Database module (db.py) imported and logger initialized")
 
 
 class DatabaseManager:
-    """Manages database connections and operations."""
+    """Manages database connections and operations using Supabase client."""
     
-    def __init__(self, database_url: str = None):
+    def __init__(self, supabase_url: str = None, supabase_key: str = None):
         """
-        Initialize database manager.
+        Initialize database manager with Supabase client.
         
         Args:
-            database_url: PostgreSQL connection URL.
-                         Format: postgresql://user:password@host:port/database
-                         If None, reads from DATABASE_URL environment variable.
+            supabase_url: Supabase project URL (e.g., https://<project>.supabase.co)
+                         If None, reads from SUPABASE_URL environment variable.
+            supabase_key: Supabase service role key (for server-side operations)
+                         If None, reads from SUPABASE_KEY environment variable.
         """
-        if database_url is None:
-            database_url = os.environ.get("DATABASE_URL")
-            if not database_url:
-                error_msg = "DATABASE_URL environment variable not set"
+        if supabase_url is None:
+            supabase_url = os.environ.get("SUPABASE_URL")
+            if not supabase_url:
+                error_msg = "SUPABASE_URL environment variable not set"
                 logger.error(error_msg)
                 raise ValueError(
                     f"{error_msg}. "
-                    "Format: postgresql://user:password@host:port/database"
+                    "Format: https://<project-ref>.supabase.co"
                 )
         
-        # Convert postgresql:// to postgresql+psycopg:// for psycopg v3 support
-        # SQLAlchemy defaults to psycopg2, but we're using psycopg (v3)
-        original_url = database_url
-        connection_type = "unknown"
-        
-        if database_url.startswith("postgresql://"):
-            database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
-            logger.debug("Converted connection URL to use psycopg (v3) driver")
-        elif database_url.startswith("postgres://"):
-            database_url = database_url.replace("postgres://", "postgresql+psycopg://", 1)
-            logger.debug("Converted postgres:// URL to use psycopg (v3) driver")
-        
-        # Detect connection type (direct vs pooled)
-        # IMPORTANT: Supabase direct connections (port 5432) use IPv6 by default
-        # which may not work in WSL2/IPv4-only environments.
-        # Pooled connections (port 6543) are IPv4-compatible.
-        is_supabase_direct = (
-            (":5432/" in original_url or ":5432?" in original_url) and
-            ".supabase.co" in original_url
-        )
-        
-        if is_supabase_direct:
-            # Automatically convert Supabase direct connection to pooled connection for IPv4 compatibility
-            logger.warning(
-                "Detected Supabase direct connection (port 5432) - IPv6 may not work in WSL2. "
-                "Converting to pooled connection (port 6543) for IPv4 compatibility..."
-            )
-            
-            # For Supabase, the transaction pooler can use the same hostname with port 6543
-            # or use aws-0-[region].pooler.supabase.com:6543
-            # Let's try changing just the port first (simpler)
-            from urllib.parse import urlparse, urlunparse
-            parsed = urlparse(database_url)
-            hostname = parsed.hostname or ""
-            
-            if "db." in hostname and ".supabase.co" in hostname:
-                # For Supabase, we need to change the hostname to the pooled format
-                # But we don't know the region. Let's try a simpler approach:
-                # Keep same hostname but change port (some Supabase setups support this)
-                # OR we could try to construct the pooler hostname, but region is unknown
-                
-                # Actually, Supabase transaction pooler uses different hostnames per region
-                # The safest approach is to just change the port on the same hostname
-                # If that doesn't work, user should use the pooled connection string from dashboard
-                
-                # Replace port 5432 with 6543
-                if ":5432/" in database_url:
-                    database_url = database_url.replace(":5432/", ":6543/")
-                elif ":5432?" in database_url:
-                    database_url = database_url.replace(":5432?", ":6543?")
-                
-                logger.info(f"Converted port 5432 -> 6543 on hostname: {hostname}")
-                logger.warning(
-                    "Using same hostname with port 6543. If connection fails, use the pooled connection string "
-                    "from Supabase dashboard: Settings -> Database -> Connection Pooling -> Transaction mode"
+        if supabase_key is None:
+            supabase_key = os.environ.get("SUPABASE_KEY")
+            if not supabase_key:
+                error_msg = "SUPABASE_KEY environment variable not set"
+                logger.error(error_msg)
+                raise ValueError(
+                    f"{error_msg}. "
+                    "Get it from Supabase Dashboard -> Settings -> API -> service_role key"
                 )
-            else:
-                # Fallback: just change port
-                if ":5432/" in database_url:
-                    database_url = database_url.replace(":5432/", ":6543/")
-                elif ":5432?" in database_url:
-                    database_url = database_url.replace(":5432?", ":6543?")
-                logger.info("Converted port 5432 -> 6543 (same hostname)")
-            
-            connection_type = "pooled (auto-converted from direct)"
-        elif ":5432/" in original_url or ":5432?" in original_url:
-            connection_type = "direct"
-        elif ":6543/" in original_url or ":6543?" in original_url:
-            connection_type = "pooled"
         
-        # Add connection parameters for Supabase compatibility
-        # Supabase requires SSL/TLS connections
-        connect_args = {}
-        
-        # For Supabase, we need to enable SSL
-        # psycopg3 uses 'sslmode' parameter
-        if "supabase" in database_url.lower():
-            connect_args["sslmode"] = "require"
-            logger.debug("Added SSL mode 'require' for Supabase connection")
-        
-        # Try to force IPv4 by adding connection parameters
-        # Note: psycopg3 uses 'hostaddr' to force IP, but we can't easily resolve here
-        # Instead, we'll rely on the pooled connection conversion above
-        
-        # Log connection (but mask password)
-        masked_url = self._mask_password(database_url)
-        logger.info(f"Initializing database connection ({connection_type}): {masked_url}")
-        if connect_args:
-            logger.debug(f"Connection args: {connect_args}")
-        
-        self.engine = create_engine(
-            database_url,
-            pool_pre_ping=True,  # Verify connections before using
-            echo=False,  # Set to True for SQL debugging (logs to logger)
-            connect_args=connect_args if connect_args else {}
-        )
-        self.SessionLocal = sessionmaker(
-            autocommit=False,
-            autoflush=False,
-            bind=self.engine
-        )
-        
-        logger.debug("Database manager initialized successfully")
-    
-    @staticmethod
-    def _mask_password(url: str) -> str:
-        """Mask password in database URL for logging."""
+        # Create Supabase client
         try:
-            from urllib.parse import urlparse, urlunparse, parse_qs
-            parsed = urlparse(url)
-            if parsed.password:
-                masked = url.replace(parsed.password, "***")
-                return masked
-            return url
-        except Exception:
-            return url.split("@")[0] + "@***" if "@" in url else url
+            self.client: Client = create_client(supabase_url, supabase_key)
+            logger.info(f"Initialized Supabase client for: {supabase_url}")
+            logger.debug("Supabase client created successfully")
+        except Exception as e:
+            logger.error(f"Failed to create Supabase client: {e}", exc_info=True)
+            raise
     
     def create_tables(self):
         """
-        Create all database tables.
-        
-        Note: Supabase handles table creation, so this is mainly for local development.
+        Note: Supabase handles table creation via SQL Editor.
+        This method is kept for compatibility but does nothing.
+        See database/SUPABASE_SETUP.md for table creation SQL.
         """
-        Base.metadata.create_all(bind=self.engine)
+        logger.info("Table creation is handled by Supabase SQL Editor")
+        logger.info("See database/SUPABASE_SETUP.md for table creation SQL")
     
     def drop_tables(self):
-        """Drop all database tables (use with caution!)."""
-        Base.metadata.drop_all(bind=self.engine)
+        """
+        Note: Table dropping should be done via Supabase SQL Editor.
+        This method is kept for compatibility but does nothing.
+        """
+        logger.warning("Table dropping should be done via Supabase SQL Editor")
     
     def initialize_vocabulary(self, max_dimensions: int = 100):
         """
@@ -178,33 +83,20 @@ class DatabaseManager:
         Args:
             max_dimensions: Maximum vector dimensions
         """
-        with self.get_session() as session:
-            results = session.query(DeveloperSkills.skill_json).filter(
-                DeveloperSkills.skill_json.isnot(None)
-            ).all()
-            
-            skill_jsons = [r[0] for r in results if r[0]]
-            build_vocabulary_from_db(skill_jsons, max_dimensions)
-    
-    @contextmanager
-    def get_session(self) -> Generator[Session, None, None]:
-        """
-        Context manager for database sessions.
-        
-        Usage:
-            with db_manager.get_session() as session:
-                # Use session here
-                pass
-        """
-        session = self.SessionLocal()
         try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+            # Fetch all records with skill_json
+            response = self.client.table("developer_skills").select("skill_json").execute()
+            
+            skill_jsons = []
+            for row in response.data:
+                if row.get("skill_json"):
+                    skill_jsons.append(row["skill_json"])
+            
+            build_vocabulary_from_db(skill_jsons, max_dimensions)
+            logger.debug(f"Vocabulary initialized from {len(skill_jsons)} records")
+        except Exception as e:
+            logger.warning(f"Vocabulary initialization failed (non-critical): {e}")
+            # Non-critical, so we don't raise
     
     def save_or_update_skill_vector(
         self,
@@ -212,7 +104,7 @@ class DatabaseManager:
         repo_name: str,
         new_skills: Dict[str, int],
         max_dimensions: int = 100
-    ) -> DeveloperSkills:
+    ) -> dict:
         """
         Save or update skill vector for a developer and repository.
         
@@ -231,22 +123,27 @@ class DatabaseManager:
             max_dimensions: Maximum vector dimensions
             
         Returns:
-            DeveloperSkills instance
+            Dictionary with saved record data (includes 'id' field)
         """
         logger.info(f"Saving skill vector - Username: {username}, Repo: {repo_name}, Skills: {len(new_skills)}")
         logger.debug(f"New skills: {new_skills}")
         
-        with self.get_session() as session:
+        # Retry logic for transient failures
+        max_retries = 3
+        retry_delay = 2  # Start with 2 seconds
+        
+        for attempt in range(max_retries):
             try:
-                # Try to find existing record for this username and repo
-                existing = session.query(DeveloperSkills).filter(
-                    DeveloperSkills.username == username,
-                    DeveloperSkills.repo_name == repo_name
-                ).first()
+                # Try to find existing record
+                existing_response = self.client.table("developer_skills").select("*").eq(
+                    "username", username
+                ).eq("repo_name", repo_name).execute()
                 
-                if existing and existing.skill_json:
+                existing = existing_response.data[0] if existing_response.data else None
+                
+                if existing and existing.get("skill_json"):
                     # Merge with existing: max(old_score, new_score) for existing skills
-                    old_skills = existing.skill_json or {}
+                    old_skills = existing.get("skill_json") or {}
                     merged_skills = merge_skill_vectors(old_skills, new_skills)
                     logger.info(f"Merging with existing vector - Found {len(old_skills)} existing skills, {len(new_skills)} new skills, {len(merged_skills)} merged")
                     logger.debug(f"Old skills: {old_skills}, New skills: {new_skills}, Merged: {merged_skills}")
@@ -264,35 +161,56 @@ class DatabaseManager:
                     logger.warning(f"Vector conversion failed: {vec_error}", exc_info=True)
                     # Continue without vector - skill_json is more important
                 
+                # Prepare data for insert/update
+                # Note: id, created_at, and updated_at have defaults in the database schema
+                # We only need to set updated_at explicitly on UPDATE
+                data = {
+                    "username": username,
+                    "repo_name": repo_name,
+                    "skill_json": merged_skills,
+                }
+                
+                if vector is not None:
+                    data["skill_vector"] = vector
+                
                 if existing:
                     # Update existing record
-                    logger.info(f"Updating existing record (ID: {existing.id})")
-                    existing.skill_json = merged_skills
-                    if vector is not None:
-                        existing.skill_vector = vector
+                    # Set updated_at to current timestamp (database default only applies on INSERT)
+                    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    
+                    logger.info(f"Updating existing record (ID: {existing.get('id')})")
+                    update_response = self.client.table("developer_skills").update(data).eq(
+                        "id", existing["id"]
+                    ).execute()
+                    
+                    result = update_response.data[0] if update_response.data else existing
+                    logger.info(f"✓ Record updated successfully! ID: {result.get('id')}, Skills: {len(merged_skills)}")
+                    return result
                 else:
                     # Create new record
+                    # id, created_at, and updated_at will use database defaults
                     logger.info(f"Creating new record")
-                    existing = DeveloperSkills(
-                        username=username,
-                        repo_name=repo_name,
-                        skill_json=merged_skills,
-                        skill_vector=vector
-                    )
-                    session.add(existing)
-                
-                # Flush to get ID before commit
-                session.flush()
-                logger.info(f"Record flushed, ID: {existing.id}")
-                
-                # Commit happens automatically when exiting context manager
-                session.refresh(existing)
-                logger.info(f"✓ Record saved successfully! ID: {existing.id}, Skills: {len(merged_skills)}")
-                return existing
-                
+                    insert_response = self.client.table("developer_skills").insert(data).execute()
+                    
+                    result = insert_response.data[0] if insert_response.data else data
+                    logger.info(f"✓ Record created successfully! ID: {result.get('id')}, Skills: {len(merged_skills)}")
+                    return result
+                    
             except Exception as e:
-                logger.error(f"Error in save_or_update_skill_vector: {e}", exc_info=True)
-                raise
+                error_str = str(e).lower()
+                is_retryable = "timeout" in error_str or "connection" in error_str or "network" in error_str
+                
+                if attempt < max_retries - 1 and is_retryable:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    logger.warning(
+                        f"Error on attempt {attempt + 1}/{max_retries}: {e}. "
+                        f"Retrying in {wait_time} seconds..."
+                    )
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"Error in save_or_update_skill_vector after {attempt + 1} attempts: {e}", exc_info=True)
+                    raise
     
     def get_skill_vector(
         self,
@@ -309,18 +227,19 @@ class DatabaseManager:
         Returns:
             Dictionary with skill vector data, or None if not found
         """
-        with self.get_session() as session:
-            query = session.query(DeveloperSkills).filter(
-                DeveloperSkills.username == username
-            )
+        try:
+            query = self.client.table("developer_skills").select("*").eq("username", username)
             
             if repo_name:
-                query = query.filter(DeveloperSkills.repo_name == repo_name)
+                query = query.eq("repo_name", repo_name)
             
-            dev_vector = query.first()
+            response = query.limit(1).execute()
             
-            if dev_vector:
-                return dev_vector.to_dict()
+            if response.data:
+                return response.data[0]
+            return None
+        except Exception as e:
+            logger.error(f"Error getting skill vector: {e}", exc_info=True)
             return None
     
     def get_all_repos_for_user(self, username: str) -> List[dict]:
@@ -333,12 +252,12 @@ class DatabaseManager:
         Returns:
             List of skill vector dictionaries
         """
-        with self.get_session() as session:
-            results = session.query(DeveloperSkills).filter(
-                DeveloperSkills.username == username
-            ).all()
-            
-            return [result.to_dict() for result in results]
+        try:
+            response = self.client.table("developer_skills").select("*").eq("username", username).execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error getting repos for user: {e}", exc_info=True)
+            return []
     
     def search_by_skills(
         self,
@@ -349,6 +268,9 @@ class DatabaseManager:
         """
         Search developers by skills using JSONB queries.
         
+        Note: Complex JSONB filtering may require RPC functions in Supabase.
+        This implementation fetches records and filters in Python for simplicity.
+        
         Args:
             skill_filters: Dictionary of skills and minimum scores,
                          e.g., {"react": 50, "javascript": 40}
@@ -358,23 +280,40 @@ class DatabaseManager:
         Returns:
             List of developer skill vectors matching the criteria
         """
-        with self.get_session() as session:
-            query = session.query(DeveloperSkills)
+        try:
+            # Start with base query
+            query = self.client.table("developer_skills").select("*")
             
-            # Filter by individual skills in skill_json
-            for skill_name, min_skill_score in skill_filters.items():
-                # JSONB query: skill_json->>'skill_name' extracts the value as text
-                # Cast to integer and compare
-                query = query.filter(
-                    text(f"(skill_json->>'{skill_name}')::int >= :min_score").bindparams(min_score=min_skill_score)
-                )
-            
-            # Optional repository filter
+            # Optional repository filter (simple equality filter)
             if repo_name:
-                query = query.filter(DeveloperSkills.repo_name == repo_name)
+                query = query.eq("repo_name", repo_name)
             
-            results = query.limit(limit).all()
-            return [result.to_dict() for result in results]
+            # Fetch records (PostgREST JSONB filtering is complex, so we filter in Python)
+            # For better performance with large datasets, consider creating an RPC function
+            response = query.limit(limit * 2).execute()  # Fetch more to account for filtering
+            
+            # Filter by skills in Python
+            filtered_results = []
+            for record in response.data or []:
+                skill_json = record.get("skill_json") or {}
+                matches_all = True
+                
+                # Check if record matches all skill filters
+                for skill_name, min_score in skill_filters.items():
+                    skill_value = skill_json.get(skill_name, 0)
+                    if not isinstance(skill_value, (int, float)) or skill_value < min_score:
+                        matches_all = False
+                        break
+                
+                if matches_all:
+                    filtered_results.append(record)
+                    if len(filtered_results) >= limit:
+                        break
+            
+            return filtered_results
+        except Exception as e:
+            logger.error(f"Error searching by skills: {e}", exc_info=True)
+            return []
     
     def search_by_vector_similarity(
         self,
@@ -386,6 +325,7 @@ class DatabaseManager:
         Search developers using vector similarity (cosine similarity).
         
         Requires pgvector extension and vector indexes in Supabase.
+        Note: This requires using RPC functions in Supabase for vector similarity search.
         
         Args:
             query_vector: Query vector to compare against
@@ -395,17 +335,19 @@ class DatabaseManager:
         Returns:
             List of developer skill vectors sorted by similarity
         """
-        with self.get_session() as session:
-            # Use pgvector cosine similarity operator
-            # Note: This requires pgvector extension and proper indexes
-            query = session.query(DeveloperSkills).filter(
-                DeveloperSkills.skill_vector.isnot(None)
-            ).order_by(
-                DeveloperSkills.skill_vector.cosine_distance(query_vector)
-            ).limit(limit)
+        try:
+            # For vector similarity, we need to use a Postgres function
+            # This is a simplified version - you may need to create a function in Supabase
+            # that performs the vector similarity search
+            logger.warning("Vector similarity search requires custom Postgres function")
+            logger.warning("This feature needs to be implemented with a Supabase RPC function")
             
-            results = query.all()
-            return [result.to_dict() for result in results]
+            # For now, return empty list
+            # TODO: Implement with Supabase RPC function for vector similarity
+            return []
+        except Exception as e:
+            logger.error(f"Error in vector similarity search: {e}", exc_info=True)
+            return []
     
     def get_all_developers(self, limit: int = 100) -> List[dict]:
         """
@@ -417,7 +359,9 @@ class DatabaseManager:
         Returns:
             List of all developer skill vectors
         """
-        with self.get_session() as session:
-            results = session.query(DeveloperSkills).limit(limit).all()
-            return [result.to_dict() for result in results]
-
+        try:
+            response = self.client.table("developer_skills").select("*").limit(limit).execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error getting all developers: {e}", exc_info=True)
+            return []

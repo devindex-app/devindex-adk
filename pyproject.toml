@@ -8,11 +8,9 @@ dependencies = [
     "eml-parser>=2.0.0",
     "google-adk>=1.0.0",
     "litellm>=1.68.0",
-    "psycopg[binary]>=3.2.9",
     "python-magic>=0.4.27",
     "python-dotenv>=1.0.0",
-    "pgvector>=0.3.0",
-    "sqlalchemy>=2.0.40",
+    "supabase>=2.0.0",
 ]
 
 

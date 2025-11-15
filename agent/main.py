@@ -30,8 +30,8 @@ try:
         db_logger.warning(f"⚠ Logs directory not found: {logs_dir}")
         
     # Check database setup
-    if os.environ.get("DATABASE_URL"):
-        db_logger.info("✓ DATABASE_URL is set")
+    if os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY"):
+        db_logger.info("✓ SUPABASE_URL and SUPABASE_KEY are set")
         try:
             from database.db import DatabaseManager
             db_logger.info("✓ Database module imported successfully")
@@ -44,7 +44,12 @@ try:
         except ImportError as import_error:
             db_logger.error(f"❌ Failed to import database module: {import_error}", exc_info=True)
     else:
-        db_logger.warning("⚠ DATABASE_URL not set - database operations will be skipped")
+        missing = []
+        if not os.environ.get("SUPABASE_URL"):
+            missing.append("SUPABASE_URL")
+        if not os.environ.get("SUPABASE_KEY"):
+            missing.append("SUPABASE_KEY")
+        db_logger.warning(f"⚠ {', '.join(missing)} not set - database operations will be skipped")
         
 except Exception as logger_error:
     print(f"⚠ Warning: Could not initialize database logger: {logger_error}")
@@ -302,12 +307,17 @@ Skill Vector for {username} (Repository: {args.repo}):
                     print(f"\n✓ Skill vector saved to database successfully!")
                     test_logger.info("Skill vector save completed successfully")
                 else:
-                    if os.environ.get("DATABASE_URL"):
+                    if os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY"):
                         print(f"\n⚠ Database save failed - check logs/database_*.log for details")
                         test_logger.warning("Database save returned False")
                     else:
-                        print(f"\n⚠ DATABASE_URL not set - skipping database save")
-                        test_logger.warning("DATABASE_URL not set, save skipped")
+                        missing = []
+                        if not os.environ.get("SUPABASE_URL"):
+                            missing.append("SUPABASE_URL")
+                        if not os.environ.get("SUPABASE_KEY"):
+                            missing.append("SUPABASE_KEY")
+                        print(f"\n⚠ {', '.join(missing)} not set - skipping database save")
+                        test_logger.warning(f"{', '.join(missing)} not set, save skipped")
             except ImportError as e:
                 print(f"\n❌ Database module import failed: {e}")
                 try:

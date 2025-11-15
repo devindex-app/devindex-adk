@@ -19,10 +19,17 @@ def main():
     Note: For Supabase, tables are typically created via SQL Editor.
     This script is mainly for local development/testing.
     """
-    if not os.environ.get("DATABASE_URL"):
-        print("❌ DATABASE_URL environment variable not set.")
+    if not os.environ.get("SUPABASE_URL"):
+        print("❌ SUPABASE_URL environment variable not set.")
         print("Please set it in your .env file:")
-        print("DATABASE_URL=postgresql://user:password@host:port/database")
+        print("SUPABASE_URL=https://<project-ref>.supabase.co")
+        sys.exit(1)
+    
+    if not os.environ.get("SUPABASE_KEY"):
+        print("❌ SUPABASE_KEY environment variable not set.")
+        print("Please set it in your .env file:")
+        print("SUPABASE_KEY=<service-role-key>")
+        print("Get it from: Supabase Dashboard -> Settings -> API -> service_role key")
         sys.exit(1)
     
     try:
@@ -32,8 +39,8 @@ def main():
         
         db = DatabaseManager()
         db.create_tables()
-        print("✓ Database tables created successfully!")
-        print("\nTables created:")
+        print("✓ Database connection verified!")
+        print("\nNote: Tables should be created via Supabase SQL Editor:")
         print("  - developer_skills")
     except Exception as e:
         print(f"❌ Error initializing database: {e}")

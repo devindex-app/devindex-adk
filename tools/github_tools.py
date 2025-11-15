@@ -1,6 +1,7 @@
 
 import os
 import subprocess
+import base64
 from typing import List, Dict, Any, Optional
 import json
 
@@ -28,6 +29,8 @@ class GithubTools:
             self.fetch_commit_diff,
             self.fetch_user_pull_requests,
             self.fetch_repo_details,
+            self.fetch_repo_file_paths,
+            self.fetch_repo_file,
         ]
 
     def read_file(self, file_path: str) -> str:
@@ -423,4 +426,156 @@ class GithubTools:
             "topics": repo_data.get("topics", []),
             "is_fork": repo_data.get("fork", False),
             "archived": repo_data.get("archived", False),
+        }
+
+    def fetch_repo_file_paths(
+        self,
+        owner: str,
+        repo: str,
+        path: str = "",
+        branch: Optional[str] = None,
+        file_extensions: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetch a list of all file paths from a GitHub repository (just paths, no file contents).
+        Recursively traverses the repository to get all file paths.
+        
+        Args:
+            owner: Repository owner username
+            repo: Repository name
+            path: Starting path in the repository (default: root "")
+            branch: Branch name (defaults to default branch, usually "main")
+            file_extensions: Optional list of file extensions to filter (e.g., [".py", ".js", ".ts"]).
+                           If None, returns all files.
+            
+        Returns:
+            Dictionary with list of file paths.
+        """
+        logger = get_logger("fetch_repo_file_paths")
+        logger.info(f"Fetching file paths from {owner}/{repo} (path: {path}, branch: {branch or 'default'})")
+        
+        # Get default branch if not specified
+        if not branch:
+            repo_details = self.fetch_repo_details(owner, repo)
+            if "error" in repo_details:
+                return {"error": f"Failed to get repo details: {repo_details.get('error')}"}
+            branch = repo_details.get("default_branch", "main")
+        
+        file_paths = []
+        
+        def _recursive_fetch_paths(current_path: str):
+            endpoint = f"/repos/{owner}/{repo}/contents/{current_path}"
+            if branch:
+                endpoint += f"?ref={branch}"
+            
+            items = self._make_api_request(endpoint)
+            
+            if "error" in items:
+                logger.warning(f"Error fetching path {current_path}: {items.get('error')}")
+                return
+            
+            # Handle single file response
+            if isinstance(items, dict) and items.get("type") == "file":
+                file_path = items.get("path", "")
+                # Check file extension filter
+                if file_extensions:
+                    if any(file_path.endswith(ext) for ext in file_extensions):
+                        file_paths.append(file_path)
+                else:
+                    file_paths.append(file_path)
+                return
+            
+            # Handle directory response (list of items)
+            if not isinstance(items, list):
+                return
+            
+            for item in items:
+                item_type = item.get("type", "")
+                item_path = item.get("path", "")
+                
+                if item_type == "file":
+                    # Check file extension filter
+                    if file_extensions:
+                        if any(item_path.endswith(ext) for ext in file_extensions):
+                            file_paths.append(item_path)
+                    else:
+                        file_paths.append(item_path)
+                elif item_type == "dir":
+                    # Recursively fetch directory contents
+                    _recursive_fetch_paths(item_path)
+        
+        # Start recursive fetch
+        _recursive_fetch_paths(path)
+        
+        return {
+            "repo": f"{owner}/{repo}",
+            "branch": branch,
+            "path": path,
+            "total_files": len(file_paths),
+            "file_paths": sorted(file_paths),
+        }
+
+    def fetch_repo_file(
+        self,
+        owner: str,
+        repo: str,
+        file_path: str,
+        branch: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Fetch the complete content of a single file from a GitHub repository.
+        Returns the full file content, not a diff.
+        
+        Args:
+            owner: Repository owner username
+            repo: Repository name
+            file_path: Path to the file in the repository (e.g., "src/main.py")
+            branch: Branch name (defaults to default branch, usually "main")
+            
+        Returns:
+            Dictionary with file content and metadata.
+        """
+        logger = get_logger("fetch_repo_file")
+        logger.info(f"Fetching file {file_path} from {owner}/{repo} (branch: {branch or 'default'})")
+        
+        # Get default branch if not specified
+        if not branch:
+            repo_details = self.fetch_repo_details(owner, repo)
+            if "error" in repo_details:
+                return {"error": f"Failed to get repo details: {repo_details.get('error')}"}
+            branch = repo_details.get("default_branch", "main")
+        
+        endpoint = f"/repos/{owner}/{repo}/contents/{file_path}"
+        if branch:
+            endpoint += f"?ref={branch}"
+        
+        file_data = self._make_api_request(endpoint)
+        
+        if "error" in file_data:
+            return file_data
+        
+        # Check if it's actually a file
+        if file_data.get("type") != "file":
+            return {"error": f"Path {file_path} is not a file (type: {file_data.get('type')})"}
+        
+        # Decode base64 content if present
+        content = ""
+        if file_data.get("encoding") == "base64":
+            try:
+                content = base64.b64decode(file_data.get("content", "")).decode("utf-8")
+            except Exception as e:
+                logger.error(f"Error decoding file content: {e}")
+                return {"error": f"Error decoding file content: {e}"}
+        else:
+            content = file_data.get("content", "")
+        
+        return {
+            "repo": f"{owner}/{repo}",
+            "branch": branch,
+            "path": file_data.get("path", ""),
+            "name": file_data.get("name", ""),
+            "size": file_data.get("size", 0),
+            "sha": file_data.get("sha", ""),
+            "content": content,
+            "encoding": file_data.get("encoding", ""),
         }

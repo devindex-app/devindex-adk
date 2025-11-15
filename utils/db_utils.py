@@ -1,4 +1,4 @@
-"""Database utilities for saving skill vectors with Supabase pgvector."""
+"""Database utilities for saving skill vectors with Supabase."""
 
 import os
 from typing import Dict, Optional
@@ -14,7 +14,8 @@ def save_skill_vector_to_db(
     username: str,
     repo_name: str,
     skills: Dict[str, int],
-    database_url: Optional[str] = None
+    supabase_url: Optional[str] = None,
+    supabase_key: Optional[str] = None
 ) -> bool:
     """
     Save or update skill vector to database with merge logic.
@@ -25,7 +26,8 @@ def save_skill_vector_to_db(
         username: GitHub username
         repo_name: Repository name that was analyzed
         skills: Dictionary of skills and scores, e.g., {"javascript": 75, "react": 80}
-        database_url: Database connection URL (optional, uses DATABASE_URL env var if not provided)
+        supabase_url: Supabase project URL (optional, uses SUPABASE_URL env var if not provided)
+        supabase_key: Supabase service role key (optional, uses SUPABASE_KEY env var if not provided)
         
     Returns:
         True if successful, False otherwise
@@ -35,9 +37,14 @@ def save_skill_vector_to_db(
         print("⚠ Warning: Empty skills dictionary, skipping database save")
         return False
     
-    if not database_url and not os.environ.get("DATABASE_URL"):
-        logger.warning("DATABASE_URL not set, skipping database save")
-        print("⚠ Warning: DATABASE_URL not set, skipping database save")
+    if not supabase_url and not os.environ.get("SUPABASE_URL"):
+        logger.warning("SUPABASE_URL not set, skipping database save")
+        print("⚠ Warning: SUPABASE_URL not set, skipping database save")
+        return False
+    
+    if not supabase_key and not os.environ.get("SUPABASE_KEY"):
+        logger.warning("SUPABASE_KEY not set, skipping database save")
+        print("⚠ Warning: SUPABASE_KEY not set, skipping database save")
         return False
     
     try:
@@ -47,7 +54,7 @@ def save_skill_vector_to_db(
         print(f"   Repo: {repo_name}")
         print(f"   Skills: {len(skills)} skills")
         
-        db = DatabaseManager(database_url=database_url)
+        db = DatabaseManager(supabase_url=supabase_url, supabase_key=supabase_key)
         
         # Initialize vocabulary from existing records (if not already done)
         try:
@@ -63,8 +70,9 @@ def save_skill_vector_to_db(
             new_skills=skills
         )
         
-        logger.info(f"Successfully saved skill vector! Record ID: {result.id}")
-        print(f"   ✓ Successfully saved! Record ID: {result.id}")
+        record_id = result.get("id") if isinstance(result, dict) else None
+        logger.info(f"Successfully saved skill vector! Record ID: {record_id}")
+        print(f"   ✓ Successfully saved! Record ID: {record_id}")
         return True
         
     except Exception as e:
@@ -80,27 +88,17 @@ def save_skill_vector_to_db(
         # Provide helpful suggestions
         error_str = str(e).lower()
         
-        # Check for IPv6/network connection issues
-        if ("name or service not known" in error_str or 
-            "network is unreachable" in error_str or 
-            "ipv6" in error_str or
-            "errno -2" in error_str):
-            logger.info("Tip: IPv6/Network connectivity issue detected")
-            print(f"\n   💡 IPv6/Network Connection Issue Detected")
-            print(f"      The direct connection (port 5432) uses IPv6 which may not work in WSL2")
-            print(f"      Solution: Use the pooled connection string from Supabase dashboard")
-            print(f"      Steps:")
-            print(f"        1. Go to Supabase Dashboard -> Settings -> Database")
-            print(f"        2. Scroll to 'Connection Pooling' section")
-            print(f"        3. Copy the 'Connection string' under 'Transaction' mode")
-            print(f"        4. It should look like: postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres")
-            print(f"        5. Update your .env file with this DATABASE_URL")
-            print(f"      Note: Pooled connections (port 6543) are IPv4-compatible")
-        elif "DATABASE_URL" in str(e) or "connection" in error_str:
-            logger.info("Tip: DATABASE_URL connection issue detected")
-            print(f"\n   💡 Tip: Check your DATABASE_URL environment variable")
-            print(f"      It should be in format: postgresql://user:password@host:port/database")
-            print(f"      For WSL2/IPv4 environments, use the pooled connection (port 6543)")
+        if "supabase_url" in error_str or "supabase_key" in error_str:
+            logger.info("Tip: Supabase credentials issue detected")
+            print(f"\n   💡 Tip: Check your Supabase environment variables")
+            print(f"      Required:")
+            print(f"      - SUPABASE_URL: https://<project-ref>.supabase.co")
+            print(f"      - SUPABASE_KEY: Service role key from Supabase Dashboard")
+            print(f"      Get them from: Supabase Dashboard -> Settings -> API")
+        elif "connection" in error_str or "network" in error_str:
+            logger.info("Tip: Connection issue detected")
+            print(f"\n   💡 Tip: Check your network connection and Supabase URL")
+            print(f"      Ensure SUPABASE_URL is correct: https://<project-ref>.supabase.co")
         elif "vector" in error_str or "pgvector" in error_str:
             logger.info("Tip: pgvector extension issue detected")
             print(f"\n   💡 Tip: Ensure pgvector extension is enabled in Supabase")
@@ -109,9 +107,11 @@ def save_skill_vector_to_db(
             logger.info("Tip: Table does not exist")
             print(f"\n   💡 Tip: Ensure the 'developer_skills' table exists in Supabase")
             print(f"      See database/SUPABASE_SETUP.md for table creation SQL")
-        elif "RLS" in str(e) or "row-level" in str(e).lower():
+        elif "RLS" in str(e) or "row-level" in str(e).lower() or "permission" in error_str:
             logger.info("Tip: RLS (Row Level Security) issue detected")
             print(f"\n   💡 Tip: Row Level Security might be blocking the operation")
+            print(f"      Ensure you're using the service_role key (not anon key)")
+            print(f"      Or disable RLS: ALTER TABLE developer_skills DISABLE ROW LEVEL SECURITY;")
             print(f"      See database/SUPABASE_SETUP.md for RLS configuration")
         
         return False

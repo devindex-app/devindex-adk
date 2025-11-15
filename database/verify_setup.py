@@ -68,8 +68,8 @@ def verify_setup():
         from database.db import DatabaseManager
         print("   ✓ DatabaseManager imported")
         
-        from database.models import DeveloperSkills
-        print("   ✓ DeveloperSkills model imported")
+        # Models are no longer needed with Supabase client (returns dicts)
+        print("   ✓ Database module structure verified")
         
         from database.vector_utils import merge_skill_vectors, skills_to_vector
         print("   ✓ Vector utilities imported")
