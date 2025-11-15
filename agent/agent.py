@@ -161,6 +161,9 @@ Skills identified:
 ...
 
 Output the skills as a list where each skill has a name and score. Include all relevant skills found. Don't include skills with no evidence (score 0).
+
+Here is the collected commit analysis data to perform skill evaluation from:
+{ctx.session.state['commits_analysis']}
             """,
             output_key="raw_skill_vector",
         )
