@@ -9,7 +9,7 @@ create table developer_skills (
   id uuid primary key default uuid_generate_v4(),
   username text not null,
   repo_name text not null,
-  skill_vector vector(100),  -- 100 = length of your skill vector
+  skill_vector vector(200),  -- 200 = length of your skill vector
   skill_json jsonb,          -- stores human-readable skills
   created_at timestamptz default now(),
   updated_at timestamptz default now()
@@ -40,7 +40,25 @@ In your Supabase SQL Editor, run:
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-### 2. Create Indexes (Optional but Recommended)
+### 2. Migrate from 100 to 200 Dimensions (If Upgrading)
+
+If you have existing records with 100-dimensional vectors, run this migration:
+
+```sql
+-- Step 1: Set all existing vectors to NULL (skill_json still has all the data)
+UPDATE developer_skills SET skill_vector = NULL;
+
+-- Step 2: Alter the column type to vector(200)
+ALTER TABLE developer_skills 
+ALTER COLUMN skill_vector TYPE vector(200);
+
+-- Step 3: Vectors will be regenerated automatically on next update
+-- The skill_json field still contains all skill data, so nothing is lost
+```
+
+**Note:** The `skill_json` field contains all the skill data, so setting vectors to NULL is safe. They will be regenerated automatically when records are updated next time.
+
+### 3. Create Indexes (Optional but Recommended)
 
 ```sql
 -- Index for fast username + repo_name lookups
@@ -54,7 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_skill_jsonb ON developer_skills USING gin(skill_j
 -- USING hnsw (skill_vector vector_cosine_ops);
 ```
 
-### 3. Set Environment Variable
+### 4. Set Environment Variable
 
 Add your Supabase connection string to `.env`:
 

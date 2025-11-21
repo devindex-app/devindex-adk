@@ -27,7 +27,7 @@ class DeveloperSkills(Base):
     - id: UUID primary key
     - username: GitHub username
     - repo_name: Repository analyzed
-    - skill_vector: Vector(100) for pgvector operations
+    - skill_vector: Vector(200) for pgvector operations
     - skill_json: JSONB for human-readable skill scores
     """
     __tablename__ = "developer_skills"
@@ -41,10 +41,10 @@ class DeveloperSkills(Base):
     # Repository name
     repo_name = Column(Text, nullable=False, index=True)
     
-    # Skill vector for pgvector operations (100 dimensions)
+    # Skill vector for pgvector operations (200 dimensions)
     # Note: Actual vector length depends on total number of skills
     # The vector is a normalized representation of skills
-    skill_vector = Column(Vector(100), nullable=True)
+    skill_vector = Column(Vector(200), nullable=True)
     
     # Human-readable skills stored as JSONB: {"javascript": 75, "react": 80}
     skill_json = Column(JSONB, nullable=True, default={})

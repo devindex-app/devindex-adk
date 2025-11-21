@@ -75,7 +75,7 @@ class DatabaseManager:
         """
         logger.warning("Table dropping should be done via Supabase SQL Editor")
     
-    def initialize_vocabulary(self, max_dimensions: int = 100):
+    def initialize_vocabulary(self, max_dimensions: int = 200):
         """
         Initialize skill vocabulary from existing database records.
         This should be called on startup to load existing skills.
@@ -103,7 +103,7 @@ class DatabaseManager:
         username: str,
         repo_name: str,
         new_skills: Dict[str, int],
-        max_dimensions: int = 100
+        max_dimensions: int = 200
     ) -> dict:
         """
         Save or update skill vector for a developer and repository.

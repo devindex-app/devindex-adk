@@ -9,7 +9,7 @@ _skill_vocabulary: Dict[str, int] = {}
 _vocabulary_lock = False
 
 
-def get_or_create_skill_index(skill_name: str, max_dimensions: int = 100) -> int:
+def get_or_create_skill_index(skill_name: str, max_dimensions: int = 200) -> int:
     """
     Get or create an index for a skill in the vocabulary.
     
@@ -30,7 +30,7 @@ def get_or_create_skill_index(skill_name: str, max_dimensions: int = 100) -> int
     return _skill_vocabulary[skill_name]
 
 
-def load_vocabulary_from_skills(skills: Dict[str, int], max_dimensions: int = 100):
+def load_vocabulary_from_skills(skills: Dict[str, int], max_dimensions: int = 200):
     """
     Load vocabulary from a skills dictionary.
     This should be called to populate the vocabulary before encoding vectors.
@@ -46,7 +46,7 @@ def load_vocabulary_from_skills(skills: Dict[str, int], max_dimensions: int = 10
         get_or_create_skill_index(skill_name, max_dimensions)
 
 
-def skills_to_vector(skills: Dict[str, int], max_dimensions: int = 100) -> List[float]:
+def skills_to_vector(skills: Dict[str, int], max_dimensions: int = 200) -> List[float]:
     """
     Convert skills dictionary to a normalized vector.
     
@@ -132,7 +132,7 @@ def merge_skill_vectors(
     return merged
 
 
-def build_vocabulary_from_db(skill_jsons: List[Dict[str, int]], max_dimensions: int = 100):
+def build_vocabulary_from_db(skill_jsons: List[Dict[str, int]], max_dimensions: int = 200):
     """
     Build vocabulary from multiple skill JSON objects from database.
     This should be called on startup to load existing skills.
