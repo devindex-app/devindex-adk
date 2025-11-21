@@ -160,13 +160,14 @@ class DatabaseManager:
                 except Exception as vec_error:
                     logger.warning(f"Vector conversion failed: {vec_error}", exc_info=True)
                     # Continue without vector - skill_json is more important
-                
+                user_id = self.client.table("profiles").select("user_id").eq("github_username", username).single().execute().data["user_id"]
                 # Prepare data for insert/update
                 # Note: id, created_at, and updated_at have defaults in the database schema
                 # We only need to set updated_at explicitly on UPDATE
                 data = {
                     "username": username,
                     "repo_name": repo_name,
+                    "user_id": user_id,
                     "skill_json": merged_skills,
                 }
                 
