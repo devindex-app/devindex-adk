@@ -461,9 +461,76 @@ class GithubTools:
                 return {"error": f"Failed to get repo details: {repo_details.get('error')}"}
             branch = repo_details.get("default_branch", "main")
         
+        # Common directories and files to ignore
+        IGNORED_PATTERNS = [
+            "node_modules",
+            ".git",
+            ".svn",
+            ".hg",
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".venv",
+            "venv",
+            "env",
+            ".env",
+            "dist",
+            "build",
+            ".next",
+            ".nuxt",
+            ".cache",
+            "coverage",
+            ".nyc_output",
+            ".idea",
+            ".vscode",
+            ".DS_Store",
+            "*.pyc",
+            "*.pyo",
+            "*.pyd",
+            ".classpath",
+            ".project",
+            ".settings",
+            "target",
+            "out",
+            "bin",
+            "obj",
+            ".gradle",
+            ".mvn",
+            "vendor",
+            "bower_components",
+            ".sass-cache",
+            ".parcel-cache",
+        ]
+        
+        def _should_ignore_path(path: str) -> bool:
+            """Check if a path should be ignored based on common patterns."""
+            path_lower = path.lower()
+            path_parts = path_lower.split("/")
+            
+            # Check if any part of the path matches ignored patterns
+            for part in path_parts:
+                for pattern in IGNORED_PATTERNS:
+                    pattern_lower = pattern.lower()
+                    # Handle wildcard patterns (e.g., "*.pyc")
+                    if pattern_lower.startswith("*"):
+                        if part.endswith(pattern_lower[1:]):
+                            return True
+                    # Exact match (directory or file name)
+                    elif part == pattern_lower:
+                        return True
+                    # Check if part starts with pattern (for patterns like ".env" matching ".env.local")
+                    elif part.startswith(pattern_lower):
+                        return True
+            return False
+        
         file_paths = []
         
         def _recursive_fetch_paths(current_path: str):
+            # Skip ignored directories
+            if _should_ignore_path(current_path):
+                logger.debug(f"Skipping ignored path: {current_path}")
+                return
+            
             endpoint = f"/repos/{owner}/{repo}/contents/{current_path}"
             if branch:
                 endpoint += f"?ref={branch}"
@@ -477,6 +544,9 @@ class GithubTools:
             # Handle single file response
             if isinstance(items, dict) and items.get("type") == "file":
                 file_path = items.get("path", "")
+                # Skip ignored files
+                if _should_ignore_path(file_path):
+                    return
                 # Check file extension filter
                 if file_extensions:
                     if any(file_path.endswith(ext) for ext in file_extensions):
@@ -492,6 +562,10 @@ class GithubTools:
             for item in items:
                 item_type = item.get("type", "")
                 item_path = item.get("path", "")
+                
+                # Skip ignored paths
+                if _should_ignore_path(item_path):
+                    continue
                 
                 if item_type == "file":
                     # Check file extension filter
