@@ -1,1 +1,1 @@
-from agent.agent import DevIndexAgent
+# DevIndex LangGraph agent package

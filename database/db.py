@@ -8,7 +8,8 @@ from supabase import create_client, Client
 from database.vector_utils import (
     merge_skill_vectors,
     skills_to_vector,
-    build_vocabulary_from_db
+    build_vocabulary_from_db,
+    load_vocabulary_from_supabase,
 )
 from database.logger import get_db_logger
 
@@ -41,13 +42,16 @@ class DatabaseManager:
                 )
         
         if supabase_key is None:
-            supabase_key = os.environ.get("SUPABASE_KEY")
+            supabase_key = (
+                os.environ.get("SUPABASE_SECRET_KEY")
+                or os.environ.get("SUPABASE_KEY")
+            )
             if not supabase_key:
-                error_msg = "SUPABASE_KEY environment variable not set"
+                error_msg = "SUPABASE_SECRET_KEY environment variable not set"
                 logger.error(error_msg)
                 raise ValueError(
                     f"{error_msg}. "
-                    "Get it from Supabase Dashboard -> Settings -> API -> service_role key"
+                    "Get it from Supabase Dashboard -> Settings -> API -> secret key"
                 )
         
         # Create Supabase client
@@ -76,27 +80,12 @@ class DatabaseManager:
         logger.warning("Table dropping should be done via Supabase SQL Editor")
     
     def initialize_vocabulary(self, max_dimensions: int = 200):
-        """
-        Initialize skill vocabulary from existing database records.
-        This should be called on startup to load existing skills.
-        
-        Args:
-            max_dimensions: Maximum vector dimensions
-        """
+        """Load vocabulary from skill_vocabulary table (DB-backed, survives restarts)."""
         try:
-            # Fetch all records with skill_json
-            response = self.client.table("developer_skills").select("skill_json").execute()
-            
-            skill_jsons = []
-            for row in response.data:
-                if row.get("skill_json"):
-                    skill_jsons.append(row["skill_json"])
-            
-            build_vocabulary_from_db(skill_jsons, max_dimensions)
-            logger.debug(f"Vocabulary initialized from {len(skill_jsons)} records")
+            load_vocabulary_from_supabase(self.client, max_dimensions)
+            logger.debug("Vocabulary loaded from skill_vocabulary table")
         except Exception as e:
             logger.warning(f"Vocabulary initialization failed (non-critical): {e}")
-            # Non-critical, so we don't raise
     
     def save_or_update_skill_vector(
         self,

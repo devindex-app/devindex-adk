@@ -42,9 +42,11 @@ def save_skill_vector_to_db(
         print("⚠ Warning: SUPABASE_URL not set, skipping database save")
         return False
     
-    if not supabase_key and not os.environ.get("SUPABASE_KEY"):
-        logger.warning("SUPABASE_KEY not set, skipping database save")
-        print("⚠ Warning: SUPABASE_KEY not set, skipping database save")
+    if not supabase_key and not (
+        os.environ.get("SUPABASE_SECRET_KEY") or os.environ.get("SUPABASE_KEY")
+    ):
+        logger.warning("SUPABASE_SECRET_KEY not set, skipping database save")
+        print("⚠ Warning: SUPABASE_SECRET_KEY not set, skipping database save")
         return False
     
     try:
