@@ -12,6 +12,6 @@ def fetch_file_tree(state: AgentState) -> dict:
 
     result = fetch_repo_file_tree(owner, repo_name, branch)
     if "error" in result:
-        return {"error": result["error"], "error_class": "GitHubAPIError"}
+        return {"error": str(result["error"]), "error_class": "GitHubAPIError"}
 
     return {"file_tree": result.get("file_tree", [])}
