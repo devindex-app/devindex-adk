@@ -49,10 +49,12 @@ def main():
     initial_state = {
         "username": args.username,
         "repo": args.repo,
-        "cache_hit": False,
     }
 
-    final_state = graph.invoke(initial_state)
+    final_state = graph.invoke(
+        initial_state,
+        config={"run_name": args.repo},
+    )
 
     if final_state.get("error"):
         print(json.dumps({
@@ -67,11 +69,9 @@ def main():
         "status": "ok",
         "username": final_state.get("username", args.username),
         "repo": final_state.get("repo_full_name", args.repo),
-        "repo_hash": final_state.get("repo_hash", ""),
-        "cache_hit": final_state.get("cache_hit", False),
         "complexity": final_state.get("complexity_score", 0.0),
         "skills": skills,
-        "files_examined": final_state.get("selected_files", []),
+        "files_examined": [f["path"] for f in final_state.get("selected_files", [])],
     }
     print(json.dumps(output, indent=2))
 

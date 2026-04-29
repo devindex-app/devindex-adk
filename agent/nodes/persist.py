@@ -170,14 +170,17 @@ def persist(state: AgentState) -> dict:
         "complexity": complexity_int,
         "hits": 0,
         "last_hit_at": now,
-        "created_at": now,
+        "analyzed_at": now,
+        "default_branch_sha": "",  # not tracked; kept for schema compatibility
+        "files_examined": files_examined,
     }
     try:
         client.table("repo_cache").upsert(
             rc_data,
             on_conflict="repo_full_name,repo_hash,prompt_version,scoring_version,model_id",
         ).execute()
-    except Exception:
-        pass
+    except Exception as rc_exc:
+        import logging as _log
+        _log.getLogger("devindex.persist").warning("repo_cache upsert failed: %s", rc_exc)
 
     return {}
