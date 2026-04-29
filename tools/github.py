@@ -111,6 +111,40 @@ def fetch_repo_file_paths(owner: str, repo: str, branch: str) -> dict:
     }
 
 
+def fetch_repo_file_tree(owner: str, repo: str, branch: str) -> dict:
+    """
+    Return all file paths with their blob SHAs using the Git Trees API.
+    Used for file-level cache invalidation: if blob_sha is unchanged since
+    the last analysis, the cached score for that file is reused.
+    """
+    sha = fetch_default_branch_sha(owner, repo, branch)
+    if not sha:
+        return {"error": f"Could not resolve HEAD SHA for branch '{branch}'"}
+
+    data = _get(f"/repos/{owner}/{repo}/git/trees/{sha}?recursive=1")
+    if "error" in data:
+        return data
+
+    file_tree = []
+    for item in data.get("tree", []):
+        if item.get("type") != "blob":
+            continue
+        path: str = item.get("path", "")
+        parts = path.split("/")
+        if any(p in _IGNORED_DIRS for p in parts[:-1]):
+            continue
+        if path.endswith(_IGNORED_SUFFIXES):
+            continue
+        file_tree.append({"path": path, "blob_sha": item.get("sha", "")})
+
+    return {
+        "repo": f"{owner}/{repo}",
+        "branch": branch,
+        "file_tree": file_tree,
+        "truncated": data.get("truncated", False),
+    }
+
+
 def fetch_repo_file(owner: str, repo: str, file_path: str, branch: str) -> dict:
     """Fetch the decoded content of a single file."""
     data = _get(f"/repos/{owner}/{repo}/contents/{file_path}?ref={branch}")
