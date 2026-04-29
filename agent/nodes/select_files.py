@@ -62,24 +62,25 @@ def _score(path: str) -> int:
 
 
 def select_files(state: AgentState) -> dict:
-    all_paths: list = state.get("file_paths", [])
+    file_tree: list = state.get("file_tree", [])  # [{"path": str, "blob_sha": str}]
 
     # score + filter
-    scored = [(p, _score(p)) for p in all_paths]
-    scored = [(p, s) for p, s in scored if s >= 0]
+    scored = [(item, _score(item["path"])) for item in file_tree]
+    scored = [(item, s) for item, s in scored if s >= 0]
 
-    # sort: priority desc, depth asc, path asc (depth = number of "/" chars)
-    scored.sort(key=lambda x: (-x[1], x[0].count("/"), x[0]))
+    # sort: priority desc, depth asc, path asc
+    scored.sort(key=lambda x: (-x[1], x[0]["path"].count("/"), x[0]["path"]))
 
     # directory cap to avoid over-sampling monolithic folders
     dir_count: dict[str, int] = {}
-    selected: list[str] = []
-    for path, _ in scored:
+    selected: list[dict] = []
+    for item, _ in scored:
+        path = item["path"]
         directory = path.rsplit("/", 1)[0] if "/" in path else ""
         if dir_count.get(directory, 0) >= DIR_CAP:
             continue
         dir_count[directory] = dir_count.get(directory, 0) + 1
-        selected.append(path)
+        selected.append(item)
         if len(selected) >= MAX_FILES:
             break
 
