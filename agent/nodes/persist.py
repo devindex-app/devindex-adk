@@ -1,10 +1,9 @@
 """Node: persist analysis results to Supabase.
 
-Writes to two tables:
+Writes to three tables:
+  file_skill_cache — one row per (repo_full_name, file_path, blob_sha) for each analyzed file
   developer_skills — one row per (username, repo_name), upserted
-  repo_cache       — one row per (repo_full_name, repo_hash, *_version, model_id)
-
-Vocabulary is also persisted to the DB so vector dimensions are stable across restarts.
+  repo_cache       — one row per repo, upserted (no longer keyed by commit SHA)
 """
 
 import json
@@ -28,7 +27,6 @@ def _get_client():
 
 
 def _load_vocabulary(client) -> dict[str, int]:
-    """Load skill→index mapping from DB (or return empty dict)."""
     try:
         resp = client.table("skill_vocabulary").select("skill_name, idx").execute()
         return {row["skill_name"]: row["idx"] for row in (resp.data or [])}
@@ -37,18 +35,16 @@ def _load_vocabulary(client) -> dict[str, int]:
 
 
 def _save_vocabulary(client, vocab: dict[str, int]):
-    """Upsert new skill entries into the vocabulary table (best-effort)."""
     if not vocab:
         return
     rows = [{"skill_name": name, "idx": idx} for name, idx in vocab.items()]
     try:
         client.table("skill_vocabulary").upsert(rows, on_conflict="skill_name").execute()
     except Exception:
-        pass  # vocabulary table might not exist yet; non-fatal
+        pass
 
 
 def _skills_to_vector(skills: dict[str, int], vocab: dict[str, int], max_dim: int = 200) -> list[float]:
-    """Convert skills dict to a fixed-dimension normalised vector using the shared vocab."""
     vec = [0.0] * max_dim
     for name, score in skills.items():
         idx = vocab.get(name)
@@ -58,9 +54,8 @@ def _skills_to_vector(skills: dict[str, int], vocab: dict[str, int], max_dim: in
 
 
 def _extend_vocabulary(existing: dict[str, int], new_skills: dict[str, int], max_dim: int = 200) -> dict[str, int]:
-    """Add any skills not yet in the vocab and return the extended dict."""
     updated = dict(existing)
-    for name in sorted(new_skills):  # sorted → deterministic index assignment
+    for name in sorted(new_skills):
         if name not in updated and len(updated) < max_dim:
             updated[name] = len(updated)
     return updated
@@ -69,18 +64,53 @@ def _extend_vocabulary(existing: dict[str, int], new_skills: dict[str, int], max
 def persist(state: AgentState) -> dict:
     username: str = state.get("username", "")
     repo_full_name: str = state.get("repo_full_name", "")
-    repo_hash: str = state.get("repo_hash", "")
     validated_skills: dict = state.get("validated_skills") or {}
-    selected_files: list = state.get("selected_files", [])
-    cache_hit: bool = state.get("cache_hit", False)
+    cache_hits: list = state.get("cache_hits", [])
+    cache_misses: list = state.get("cache_misses", [])
+    complexity_score: float = state.get("complexity_score", 0.0)
+
+    # When all files were cache hits, validated_skills is empty — aggregate from hits
+    if not validated_skills and cache_hits:
+        aggregated: dict[str, int] = {}
+        for hit in cache_hits:
+            for skill, score in (hit.get("skill_json") or {}).items():
+                try:
+                    aggregated[skill] = max(aggregated.get(skill, 0), int(score))
+                except (TypeError, ValueError):
+                    pass
+        if not aggregated:
+            return {}
+        validated_skills = aggregated
+        # Derive complexity from cached per-file values
+        hit_complexities = [h.get("complexity") or 0 for h in cache_hits]
+        if hit_complexities:
+            complexity_score = sum(hit_complexities) / len(hit_complexities) / 100.0
 
     if not validated_skills:
-        return {}  # nothing to persist
+        return {}
 
     try:
         client = _get_client()
     except RuntimeError:
-        return {}  # no DB config — skip silently
+        return {}
+
+    # --- file_skill_cache: persist newly analyzed files ---
+    complexity_int = round(complexity_score * 100)
+    for file_item in cache_misses:
+        try:
+            client.table("file_skill_cache").upsert(
+                {
+                    "repo_full_name": repo_full_name,
+                    "file_path": file_item["path"],
+                    "blob_sha": file_item["blob_sha"],
+                    "skill_json": validated_skills,
+                    "complexity": complexity_int,
+                    "analyzed_at": datetime.now(timezone.utc).isoformat(),
+                },
+                on_conflict="repo_full_name,file_path,blob_sha",
+            ).execute()
+        except Exception:
+            pass  # non-fatal
 
     # --- vocabulary ---
     vocab = _load_vocabulary(client)
@@ -92,22 +122,24 @@ def persist(state: AgentState) -> dict:
     now = datetime.now(timezone.utc).isoformat()
 
     # --- developer_skills upsert ---
+    selected_files: list = state.get("selected_files", [])
+    files_examined = [f["path"] if isinstance(f, dict) else f for f in selected_files]
+
     ds_data = {
         "username": username,
         "repo_name": repo_full_name,
         "skill_json": validated_skills,
         "skill_vector": skill_vector,
-        "repo_hash": repo_hash,
+        "repo_hash": "",  # no longer used as cache key
         "prompt_version": _PROMPT_VERSION,
         "scoring_version": _SCORING_VERSION,
         "model_id": _MODEL_ID,
-        "files_examined": selected_files,
+        "files_examined": files_examined,
         "analyzed_at": now,
         "updated_at": now,
     }
 
     try:
-        # try to get user_id from profiles (optional — may not exist)
         p_resp = (
             client.table("profiles")
             .select("user_id")
@@ -128,14 +160,14 @@ def persist(state: AgentState) -> dict:
         return {"error": f"DB write failed: {e}", "error_class": "PersistError"}
 
     # --- repo_cache upsert ---
-    cache_status = "hit" if cache_hit else "fresh"
     rc_data = {
         "repo_full_name": repo_full_name,
-        "repo_hash": repo_hash,
+        "repo_hash": "",  # kept for schema compatibility, no longer a cache key
         "prompt_version": _PROMPT_VERSION,
         "scoring_version": _SCORING_VERSION,
         "model_id": _MODEL_ID,
         "skill_json": validated_skills,
+        "complexity": complexity_int,
         "hits": 0,
         "last_hit_at": now,
         "created_at": now,
@@ -146,6 +178,6 @@ def persist(state: AgentState) -> dict:
             on_conflict="repo_full_name,repo_hash,prompt_version,scoring_version,model_id",
         ).execute()
     except Exception:
-        pass  # cache write failure is non-fatal
+        pass
 
-    return {}  # state unchanged — result already in validated_skills
+    return {}
