@@ -29,6 +29,7 @@ def score_skills(state: AgentState) -> dict:
     language_bytes: dict = state.get("language_bytes", {})
     file_contents: dict = state.get("file_contents", {})
     complexity_score: float = state.get("complexity_score", 0.0)
+    cache_hits: list = state.get("cache_hits", [])
 
     primary_language = (
         max(language_bytes, key=language_bytes.get)
@@ -58,4 +59,21 @@ def score_skills(state: AgentState) -> dict:
     structured_llm = llm.with_structured_output(SkillVector)
 
     result: SkillVector = structured_llm.invoke(prompt)
-    return {"skill_vector": result.model_dump()}
+    fresh_skills: dict[str, int] = {
+        item["name"]: item["score"]
+        for item in (result.model_dump().get("skills") or [])
+    }
+
+    # Merge cache_hits skill_json — take max per skill so cached strengths are preserved
+    for hit in cache_hits:
+        for skill, score in (hit.get("skill_json") or {}).items():
+            try:
+                fresh_skills[skill] = max(fresh_skills.get(skill, 0), int(score))
+            except (TypeError, ValueError):
+                pass
+
+    return {
+        "skill_vector": {
+            "skills": [{"name": k, "score": v} for k, v in fresh_skills.items()]
+        }
+    }
