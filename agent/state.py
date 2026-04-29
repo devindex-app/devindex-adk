@@ -16,28 +16,25 @@ class AgentState(TypedDict, total=False):
     repo_metadata: dict
     language_bytes: dict  # {"Python": 12345, ...}
 
-    # --- after compute_hash ---
-    repo_hash: str        # hex digest used as cache key
-
-    # --- after check_cache ---
-    cache_hit: bool
-    cached_result: Optional[dict]  # None on miss
-
-    # --- after list_files ---
-    file_paths: list      # all non-ignored paths
+    # --- after fetch_file_tree ---
+    file_tree: list   # [{"path": str, "blob_sha": str}, ...]
 
     # --- after select_files ---
-    selected_files: list  # ≤20 deterministically chosen paths
+    selected_files: list  # [{"path": str, "blob_sha": str}] ≤20 items
+
+    # --- after check_file_cache ---
+    cache_hits: list    # [{"path": str, "skill_json": dict, "complexity": int}]
+    cache_misses: list  # [{"path": str, "blob_sha": str}]
 
     # --- after fetch_files ---
-    file_contents: dict   # {path: content}
+    file_contents: dict   # {path: content_str} — only for cache_misses
 
     # --- after compute_complexity ---
     complexity_score: float
     complexity_details: dict
 
     # --- after score_skills ---
-    skill_vector: Optional[dict]  # raw SkillVector as dict
+    skill_vector: Optional[dict]  # {"skills": [{"name": str, "score": int}]}
 
     # --- after validate_scores ---
     validated_skills: Optional[dict]  # {name: score (0-100)}
