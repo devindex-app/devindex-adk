@@ -21,8 +21,11 @@ _TEST_MARKERS = {"test", "spec", "__tests__", "tests/"}
 
 def compute_complexity(state: AgentState) -> dict:
     language_bytes: dict = state.get("language_bytes", {})
-    selected: list = state.get("selected_files", [])
-    file_contents: dict = state.get("file_contents", {})
+    selected_raw: list = state.get("selected_files", [])
+    # selected_files is now list[dict] with "path" key
+    selected: list[str] = [
+        f["path"] if isinstance(f, dict) else f for f in selected_raw
+    ]
 
     # 1. language diversity (0–1, log-scaled, saturates at ~8 languages)
     num_langs = max(1, len(language_bytes))
