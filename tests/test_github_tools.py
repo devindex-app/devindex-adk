@@ -16,8 +16,7 @@ def test_fetch_repo_file_tree_returns_blobs_only():
         ],
         "truncated": False,
     }
-    with patch("tools.github.fetch_default_branch_sha", return_value="headsha"), \
-         patch("tools.github._get", return_value=fake_tree_response):
+    with patch("tools.github._get", return_value=fake_tree_response):
         result = fetch_repo_file_tree("owner", "myrepo", "main")
 
     assert "error" not in result
@@ -26,6 +25,7 @@ def test_fetch_repo_file_tree_returns_blobs_only():
     assert "README.md" in paths
     assert "src" not in paths
     assert "node_modules/lib.js" not in paths
+    assert result["total_files"] == 2
 
 
 def test_fetch_repo_file_tree_includes_blob_sha():
@@ -33,24 +33,14 @@ def test_fetch_repo_file_tree_includes_blob_sha():
         "tree": [{"type": "blob", "path": "src/app.py", "sha": "blobsha1"}],
         "truncated": False,
     }
-    with patch("tools.github.fetch_default_branch_sha", return_value="headsha"), \
-         patch("tools.github._get", return_value=fake_tree_response):
+    with patch("tools.github._get", return_value=fake_tree_response):
         result = fetch_repo_file_tree("owner", "myrepo", "main")
 
     assert result["file_tree"][0] == {"path": "src/app.py", "blob_sha": "blobsha1"}
 
 
 def test_fetch_repo_file_tree_propagates_api_error():
-    with patch("tools.github.fetch_default_branch_sha", return_value="headsha"), \
-         patch("tools.github._get", return_value={"error": "HTTP 404: Not Found"}):
+    with patch("tools.github._get", return_value={"error": "HTTP 404: Not Found"}):
         result = fetch_repo_file_tree("owner", "missing", "main")
-
-    assert "error" in result
-
-
-def test_fetch_repo_file_tree_empty_sha():
-    """If fetch_default_branch_sha returns empty string, return error."""
-    with patch("tools.github.fetch_default_branch_sha", return_value=""):
-        result = fetch_repo_file_tree("owner", "myrepo", "main")
 
     assert "error" in result

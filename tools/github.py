@@ -117,11 +117,7 @@ def fetch_repo_file_tree(owner: str, repo: str, branch: str) -> dict:
     Used for file-level cache invalidation: if blob_sha is unchanged since
     the last analysis, the cached score for that file is reused.
     """
-    sha = fetch_default_branch_sha(owner, repo, branch)
-    if not sha:
-        return {"error": f"Could not resolve HEAD SHA for branch '{branch}'"}
-
-    data = _get(f"/repos/{owner}/{repo}/git/trees/{sha}?recursive=1")
+    data = _get(f"/repos/{owner}/{repo}/git/trees/{branch}?recursive=1")
     if "error" in data:
         return data
 
@@ -140,6 +136,7 @@ def fetch_repo_file_tree(owner: str, repo: str, branch: str) -> dict:
     return {
         "repo": f"{owner}/{repo}",
         "branch": branch,
+        "total_files": len(file_tree),
         "file_tree": file_tree,
         "truncated": data.get("truncated", False),
     }
